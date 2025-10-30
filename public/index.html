@@ -5,95 +5,31 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Peer Share Stream</title>
   <style>
-    body {
-      font-family: 'Segoe UI', sans-serif;
-      background: linear-gradient(135deg, #0d1117, #1b2735);
-      color: #fff;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: flex-start;
-      min-height: 100vh;
-      margin: 0;
-      padding: 20px;
-    }
-    h2 {
-      font-size: 28px;
-      margin-bottom: 10px;
-    }
-    input, button {
-      padding: 10px;
-      margin: 5px;
-      border-radius: 8px;
-      border: none;
-      font-size: 16px;
-      outline: none;
-    }
-    input {
-      width: 200px;
-      text-align: center;
-    }
-    button {
-      background-color: #1e88e5;
-      color: #fff;
-      cursor: pointer;
-      transition: 0.2s;
-    }
-    button:hover {
-      background-color: #1565c0;
-    }
-    #controls {
-      margin: 10px 0;
-    }
-    #videos {
-      display: flex;
-      justify-content: center;
-      flex-wrap: wrap;
-      gap: 15px;
-      margin-top: 15px;
-      width: 100%;
-    }
-    video {
-      border-radius: 12px;
-      background: #000;
-      width: 45%;
-      max-width: 420px;
-      transition: transform 0.3s ease;
-    }
-    video:hover {
-      transform: scale(1.02);
-    }
-    .fullscreen-btn {
-      position: absolute;
-      bottom: 10px;
-      right: 10px;
-      background: rgba(0, 0, 0, 0.5);
-      border: none;
-      color: white;
-      padding: 5px 8px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 14px;
-    }
-    .video-wrapper {
-      position: relative;
-      display: inline-block;
-    }
-    #status {
-      font-size: 14px;
-      color: #8ab4f8;
-      margin-top: 5px;
-    }
+    body { font-family: 'Segoe UI', sans-serif; background: linear-gradient(135deg,#0d1117,#1b2735); color:#fff; margin:0; padding:20px; display:flex; flex-direction:column; align-items:center; }
+    h2 { margin: 8px 0 14px 0; }
+    .controls-row { display:flex; gap:8px; align-items:center; }
+    input, button { padding:10px 12px; border-radius:8px; border:none; font-size:15px; outline:none; }
+    input { width:220px; text-align:center; }
+    button { background:#1e88e5; color:#fff; cursor:pointer; }
+    button:disabled { background:#3a5d83; cursor:not-allowed; }
+    #videos { display:flex; gap:16px; margin-top:18px; width:100%; justify-content:center; flex-wrap:wrap; }
+    .video-wrapper { position:relative; }
+    video { width: 360px; max-width: 42vw; border-radius:10px; background:#000; }
+    .fullscreen-btn { position:absolute; bottom:8px; right:8px; background:rgba(0,0,0,0.5); color:#fff; border:none; padding:6px; border-radius:6px; cursor:pointer; }
+    #status { margin-top:10px; color:#9fc5ff; min-height:18px; }
+    #clients { margin-left:10px; color:#cfe8ff; font-size:13px; }
   </style>
 </head>
 <body>
   <h2>🎥 Peer Share Stream</h2>
 
-  <input id="room" placeholder="Enter Room ID" />
-  <button id="joinBtn">Join Room</button>
-  <div id="status"></div>
+  <div class="controls-row">
+    <input id="room" placeholder="Enter Room ID (e.g. demo1)" />
+    <button id="joinBtn">Join Room</button>
+    <span id="clients"></span>
+  </div>
 
-  <div id="controls" style="display:none">
+  <div id="controls" style="display:none; margin-top:12px;">
     <button id="shareVideo">📹 Video</button>
     <button id="shareAudio">🎤 Audio</button>
     <button id="shareBoth">🎥 Both</button>
@@ -110,118 +46,195 @@
     </div>
   </div>
 
+  <div id="status"></div>
+
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-<script>
-const socket = io();
-let pc, localStream;
-let currentRoom;
-let isInitiator = false;
+  <script>
+    const socket = io();
+    let pc = null;
+    let localStream = null;
+    let currentRoom = null;
+    let isSharing = false;      // true when this peer started sharing
+    const joinBtn = document.getElementById("joinBtn");
+    const roomInput = document.getElementById("room");
+    const controls = document.getElementById("controls");
+    const localVideo = document.getElementById("localVideo");
+    const remoteVideo = document.getElementById("remoteVideo");
+    const statusDiv = document.getElementById("status");
+    const clientsSpan = document.getElementById("clients");
 
-const joinBtn = document.getElementById("joinBtn");
-const roomInput = document.getElementById("room");
-const controls = document.getElementById("controls");
-const localVideo = document.getElementById("localVideo");
-const remoteVideo = document.getElementById("remoteVideo");
-const statusDiv = document.getElementById("status");
+    function log(msg) { console.log(msg); statusDiv.textContent = msg; }
 
-function log(msg) {
-  console.log(msg);
-  statusDiv.textContent = msg;
-}
+    // Show controls after join (so users always see share buttons)
+    joinBtn.onclick = () => {
+      const room = roomInput.value.trim();
+      if (!room) return alert("Enter room ID!");
+      currentRoom = room;
+      socket.emit("join-room", room);
+      controls.style.display = "block"; // show share options immediately after join
+      log("Joining room " + room + " ...");
+    };
 
-joinBtn.onclick = () => {
-  const room = roomInput.value.trim();
-  if (!room) return alert("Enter room ID!");
-  currentRoom = room;
-  socket.emit("join-room", room);
-  log("Joining room " + room);
-};
+    // Update clients display
+    socket.on("room-update", ({ clients }) => {
+      const count = (clients && clients.length) || 0;
+      clientsSpan.textContent = count > 0 ? `In room: ${count}` : "";
+      log(`Room members: ${count}`);
+      // If two clients are present, we mark ready but do not auto-offer.
+      if (count === 2) {
+        log("Peer available. You can click Share to start streaming.");
+      }
+    });
 
-socket.on("room-full", () => alert("Room full. Only 2 users allowed."));
-socket.on("ready", () => {
-  log("✅ Ready: peer available");
-  if (!pc) setupPeer();
-  if (isInitiator) startCall();
-});
+    socket.on("room-full", () => {
+      alert("Room is full (max 2). Try another room.");
+      log("Room full");
+    });
 
-function setupPeer() {
-  pc = new RTCPeerConnection({
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-  });
+    // When server says both are ready
+    socket.on("ready", () => {
+      log("Both participants present. Ready to connect.");
+      // do not auto-create offer — wait until user clicks Share
+      // If this peer was already sharing (reconnect), restart call
+      if (isSharing && pc) {
+        // optionally re-negotiate
+        createAndSendOffer();
+      }
+    });
 
-  pc.onicecandidate = (e) => {
-    if (e.candidate)
-      socket.emit("ice-candidate", { roomId: currentRoom, candidate: e.candidate });
-  };
+    // Create or return existing RTCPeerConnection (with cleanup)
+    function ensurePeer() {
+      if (pc) return pc;
+      // Clean up any previous
+      pc = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+      });
 
-  pc.onconnectionstatechange = () => {
-    console.log("PC state:", pc.connectionState);
-    if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
-      log("⚠️ Disconnected. Waiting for reconnect...");
+      pc.onicecandidate = (e) => {
+        if (e.candidate && currentRoom) {
+          socket.emit("ice-candidate", { roomId: currentRoom, candidate: e.candidate });
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        log("Connection state: " + pc.connectionState);
+        if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+          // keep the UI available for retry
+          log("Disconnected. You may retry sharing.");
+        }
+      };
+
+      pc.ontrack = (ev) => {
+        remoteVideo.srcObject = ev.streams[0];
+        log("Receiving remote stream");
+      };
+
+      return pc;
     }
-  };
 
-  pc.ontrack = (e) => {
-    remoteVideo.srcObject = e.streams[0];
-    log("📺 Receiving remote stream");
-  };
-}
+    // Add local tracks (but do not play localVideo necessarily)
+    async function addLocalTracks(constraints) {
+      if (localStream) {
+        // stop existing tracks and remove
+        localStream.getTracks().forEach(t => t.stop());
+        localStream = null;
+      }
+      localStream = await navigator.mediaDevices.getUserMedia(constraints);
+      // show local preview but muted
+      localVideo.srcObject = localStream;
+      const connection = ensurePeer();
+      localStream.getTracks().forEach(t => connection.addTrack(t, localStream));
+    }
 
-socket.on("offer", async ({ offer }) => {
-  if (!pc) setupPeer();
-  await pc.setRemoteDescription(new RTCSessionDescription(offer));
-  const answer = await pc.createAnswer();
-  await pc.setLocalDescription(answer);
-  socket.emit("answer", { roomId: currentRoom, answer });
-});
+    // Called when user clicks share
+    async function share(type) {
+      if (!currentRoom) return alert("Join a room first.");
+      const constraints = (type === "video") ? { video: true } :
+                          (type === "audio") ? { audio: true } : { video: true, audio: true };
 
-socket.on("answer", async ({ answer }) => {
-  await pc.setRemoteDescription(new RTCSessionDescription(answer));
-});
+      try {
+        await addLocalTracks(constraints);
+        isSharing = true;
+        // ensure peer exists and then create/send offer
+        ensurePeer();
+        await createAndSendOffer();
+        log("Sharing started.");
+      } catch (err) {
+        console.error(err);
+        alert("Unable to access camera/microphone. Check permissions.");
+      }
+    }
 
-socket.on("ice-candidate", async (candidate) => {
-  try {
-    await pc.addIceCandidate(new RTCIceCandidate(candidate));
-  } catch (err) {
-    console.error("ICE error", err);
-  }
-});
+    async function createAndSendOffer() {
+      if (!pc) ensurePeer();
+      try {
+        // create offer and send to other peer
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit("offer", { roomId: currentRoom, offer });
+        log("Sent offer");
+      } catch (err) {
+        console.error("Offer error", err);
+      }
+    }
 
-async function share(type) {
-  let constraints = {};
-  if (type === "video") constraints.video = true;
-  if (type === "audio") constraints.audio = true;
-  if (type === "both") constraints = { video: true, audio: true };
+    // Incoming signaling
+    socket.on("offer", async ({ offer, from }) => {
+      log("Received offer");
+      // if pc already exists and we are the sharer (initiator) we could have collision
+      // we avoid collision by only responding with answer
+      ensurePeer();
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit("answer", { roomId: currentRoom, answer });
+        log("Sent answer");
+      } catch (err) {
+        console.error("Error handling offer", err);
+      }
+    });
 
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia(constraints);
-    localVideo.srcObject = localStream;
-    localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
-    isInitiator = true;
-    startCall();
-  } catch (err) {
-    alert("⚠️ Cannot access camera or mic");
-    console.error(err);
-  }
-}
+    socket.on("answer", async ({ answer }) => {
+      log("Received answer");
+      if (!pc) return;
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      } catch (err) {
+        console.error("Error setting remote answer", err);
+      }
+    });
 
-async function startCall() {
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  socket.emit("offer", { roomId: currentRoom, offer });
-  log("📡 Sending offer...");
-}
+    socket.on("ice-candidate", async (candidate) => {
+      if (!pc) return;
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (err) {
+        console.warn("Failed to add ICE candidate", err);
+      }
+    });
 
-document.getElementById("shareVideo").onclick = () => share("video");
-document.getElementById("shareAudio").onclick = () => share("audio");
-document.getElementById("shareBoth").onclick = () => share("both");
+    // Buttons
+    document.getElementById("shareVideo").onclick = () => share("video");
+    document.getElementById("shareAudio").onclick = () => share("audio");
+    document.getElementById("shareBoth").onclick = () => share("both");
 
-function toggleFullscreen(videoId) {
-  const video = document.getElementById(videoId);
-  if (document.fullscreenElement) document.exitFullscreen();
-  else video.requestFullscreen();
-}
-</script>
+    // Rejoin automatically if socket reconnects (keeping the same room)
+    socket.on("connect", () => {
+      if (currentRoom) {
+        socket.emit("join-room", currentRoom);
+        log("Socket reconnected, re-joining room...");
+      }
+    });
 
+    // Fullscreen helper
+    function toggleFullscreen(id) {
+      const v = document.getElementById(id);
+      if (!v) return;
+      if (document.fullscreenElement) document.exitFullscreen();
+      else v.requestFullscreen();
+    }
+    window.toggleFullscreen = toggleFullscreen;
+  </script>
 </body>
 </html>
