@@ -6,7 +6,7 @@ const path = require("path");
 const app = express();
 const server = http.createServer(app);
 
-// 💡 keepalive & CORS fix for Render
+// keepalive & CORS (helps on Render)
 const io = new Server(server, {
   cors: { origin: "*" },
   pingInterval: 25000,
@@ -15,48 +15,65 @@ const io = new Server(server, {
 
 app.use(express.static(path.join(__dirname, "public")));
 
-const rooms = {}; // Track connections per room
+const rooms = {}; // { roomId: [socketId,...] }
 
 io.on("connection", (socket) => {
   console.log("🔗 User connected:", socket.id);
 
   socket.on("join-room", (roomId) => {
+    if (!roomId) return;
     const clients = rooms[roomId] || [];
 
-    if (clients.length >= 2) {
-      socket.emit("room-full");
-      return;
+    // Prevent duplicate entries for the same socket
+    if (!clients.includes(socket.id)) {
+      // If room full (2) then reject
+      if (clients.length >= 2) {
+        socket.emit("room-full");
+        console.log(`❌ ${socket.id} denied join ${roomId} (full)`);
+        return;
+      }
+      clients.push(socket.id);
+      rooms[roomId] = clients;
+      socket.join(roomId);
+      console.log(`👤 ${socket.id} joined ${roomId}`);
+    } else {
+      // Already in room (reconnect) - re-join socket to room
+      socket.join(roomId);
+      console.log(`🔁 ${socket.id} re-joined ${roomId}`);
     }
 
-    clients.push(socket.id);
-    rooms[roomId] = clients;
-    socket.join(roomId);
-    console.log(`👤 ${socket.id} joined ${roomId}`);
+    // Notify participants about room state
+    const updated = rooms[roomId] || [];
+    io.to(roomId).emit("room-update", { clients: updated });
 
-    // Notify only the *other* peer that someone joined
-    if (clients.length === 2) {
-      io.to(clients[0]).emit("ready");
-      io.to(clients[1]).emit("ready");
+    // When there are two users, emit ready to both
+    if (updated.length === 2) {
+      io.to(roomId).emit("ready");
     }
   });
 
   socket.on("offer", (data) => {
-    socket.to(data.roomId).emit("offer", { offer: data.offer });
+    if (!data || !data.roomId) return;
+    socket.to(data.roomId).emit("offer", { offer: data.offer, from: socket.id });
   });
 
   socket.on("answer", (data) => {
-    socket.to(data.roomId).emit("answer", { answer: data.answer });
+    if (!data || !data.roomId) return;
+    socket.to(data.roomId).emit("answer", { answer: data.answer, from: socket.id });
   });
 
   socket.on("ice-candidate", (data) => {
+    if (!data || !data.roomId) return;
     socket.to(data.roomId).emit("ice-candidate", data.candidate);
   });
 
   socket.on("disconnect", () => {
     console.log("❌ Disconnected:", socket.id);
+    // Remove from rooms
     for (const roomId in rooms) {
       rooms[roomId] = rooms[roomId].filter((id) => id !== socket.id);
       if (rooms[roomId].length === 0) delete rooms[roomId];
+      else io.to(roomId).emit("room-update", { clients: rooms[roomId] });
     }
   });
 });
