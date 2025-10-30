@@ -1,92 +1,154 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>Peer Media Share</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Peer Share Stream</title>
   <style>
-    video { width: 45%; margin: 10px; background: #000; }
-    button { margin: 5px; padding: 10px; }
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      background: #121212;
+      color: #fff;
+    }
+    h2 {
+      margin-top: 20px;
+    }
+    #controls {
+      margin: 15px;
+    }
+    input, button {
+      padding: 10px;
+      margin: 5px;
+      border-radius: 8px;
+      border: none;
+      font-size: 16px;
+    }
+    input {
+      width: 200px;
+    }
+    button {
+      background-color: #1e88e5;
+      color: #fff;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #1565c0;
+    }
+    video {
+      width: 45%;
+      max-width: 400px;
+      margin: 10px;
+      border-radius: 10px;
+      background: #000;
+    }
+    #videos {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
   </style>
 </head>
 <body>
-  <h2>Peer Media Share</h2>
-  <input id="room" placeholder="Room ID">
-  <button id="joinBtn">Join</button>
-  <div id="controls" style="display:none">
-    <button id="shareVideo">Share Video</button>
-    <button id="shareAudio">Share Audio</button>
-    <button id="shareBoth">Share Both</button>
+  <h2>🎥 Peer Share Stream</h2>
+  <div>
+    <input id="room" placeholder="Enter Room ID" />
+    <button id="joinBtn">Join Room</button>
   </div>
-  <video id="localVideo" autoplay muted></video>
-  <video id="remoteVideo" autoplay></video>
+  <div id="controls" style="display:none">
+    <button id="shareVideo">📹 Share Video</button>
+    <button id="shareAudio">🎤 Share Audio</button>
+    <button id="shareBoth">🎥 Share Both</button>
+  </div>
+  <div id="videos">
+    <video id="localVideo" autoplay muted playsinline></video>
+    <video id="remoteVideo" autoplay playsinline></video>
+  </div>
 
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <script>
     const socket = io();
     let pc;
-    const roomInput = document.getElementById('room');
-    const joinBtn = document.getElementById('joinBtn');
-    const controls = document.getElementById('controls');
-    const localVideo = document.getElementById('localVideo');
-    const remoteVideo = document.getElementById('remoteVideo');
+    let currentRoom;
+
+    const joinBtn = document.getElementById("joinBtn");
+    const roomInput = document.getElementById("room");
+    const controls = document.getElementById("controls");
+    const localVideo = document.getElementById("localVideo");
+    const remoteVideo = document.getElementById("remoteVideo");
 
     joinBtn.onclick = () => {
       const room = roomInput.value.trim();
-      if (!room) return alert("Enter room ID!");
-      socket.emit('join', room);
-      controls.style.display = 'block';
-      setupPeer(room);
+      if (!room) return alert("Enter room ID");
+      currentRoom = room;
+      socket.emit("join-room", room);
+      controls.style.display = "block";
+      setupPeerConnection();
     };
 
-    function setupPeer(room) {
-      const config = {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' }
-        ]
-      };
-      pc = new RTCPeerConnection(config);
+    function setupPeerConnection() {
+      pc = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      });
 
-      pc.ontrack = e => {
-        remoteVideo.srcObject = e.streams[0];
+      pc.ontrack = (event) => {
+        remoteVideo.srcObject = event.streams[0];
       };
 
-      pc.onicecandidate = e => {
-        if (e.candidate)
-          socket.emit('signal', { room, candidate: e.candidate });
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit("ice-candidate", {
+            roomId: currentRoom,
+            candidate: event.candidate,
+          });
+        }
       };
 
-      socket.on('signal', async data => {
-        if (data.offer) {
-          await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          socket.emit('signal', { room, answer });
-        } else if (data.answer) {
-          await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-        } else if (data.candidate) {
-          try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch {}
+      socket.on("user-joined", async () => {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit("offer", { roomId: currentRoom, offer });
+      });
+
+      socket.on("offer", async (data) => {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit("answer", { roomId: currentRoom, answer });
+      });
+
+      socket.on("answer", async (data) => {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+      });
+
+      socket.on("ice-candidate", async (candidate) => {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (err) {
+          console.error("Error adding ICE candidate:", err);
         }
       });
     }
 
     async function share(type) {
       let constraints = {};
-      if (type === 'video') constraints.video = true;
-      if (type === 'audio') constraints.audio = true;
-      if (type === 'both') constraints = { video: true, audio: true };
+      if (type === "video") constraints.video = true;
+      if (type === "audio") constraints.audio = true;
+      if (type === "both") constraints = { video: true, audio: true };
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      localVideo.srcObject = stream;
-      stream.getTracks().forEach(track => pc.addTrack(track, stream));
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      const room = roomInput.value.trim();
-      socket.emit('signal', { room, offer });
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        localVideo.srcObject = stream;
+        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+      } catch (err) {
+        alert("Media access denied.");
+        console.error(err);
+      }
     }
 
-    document.getElementById('shareVideo').onclick = () => share('video');
-    document.getElementById('shareAudio').onclick = () => share('audio');
-    document.getElementById('shareBoth').onclick = () => share('both');
+    document.getElementById("shareVideo").onclick = () => share("video");
+    document.getElementById("shareAudio").onclick = () => share("audio");
+    document.getElementById("shareBoth").onclick = () => share("both");
   </script>
 </body>
 </html>
