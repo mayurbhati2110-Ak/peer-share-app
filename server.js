@@ -1,32 +1,32 @@
-import express from "express";
-import http from "http";
-import { Server } from "socket.io";
-import path from "path";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+const path = require("path");
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+// Serve static files from public/
 app.use(express.static(path.join(__dirname, "public")));
 
-io.on("connection", socket => {
-  console.log("A user connected");
+io.on("connection", (socket) => {
+  console.log("User connected:", socket.id);
 
-  socket.on("join", room => {
-    socket.join(room);
-    console.log(`User joined room ${room}`);
+  socket.on("join-room", (roomId) => {
+    socket.join(roomId);
+    console.log(`${socket.id} joined room ${roomId}`);
   });
 
-  socket.on("signal", data => {
-    socket.to(data.room).emit("signal", data);
-  });
+  socket.on("offer", (data) => socket.to(data.roomId).emit("offer", data.offer));
+  socket.on("answer", (data) => socket.to(data.roomId).emit("answer", data.answer));
+  socket.on("ice-candidate", (data) =>
+    socket.to(data.roomId).emit("ice-candidate", data.candidate)
+  );
 
-  socket.on("disconnect", () => console.log("User disconnected"));
+  socket.on("disconnect", () => console.log("User disconnected:", socket.id));
 });
 
+// ✅ Use Render's PORT variable (important!)
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log("Server running on port", PORT));
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
