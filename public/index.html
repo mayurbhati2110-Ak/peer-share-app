@@ -111,111 +111,117 @@
   </div>
 
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-  <script>
-    const socket = io();
-    let pc, currentRoom;
-    const joinBtn = document.getElementById("joinBtn");
-    const roomInput = document.getElementById("room");
-    const controls = document.getElementById("controls");
-    const localVideo = document.getElementById("localVideo");
-    const remoteVideo = document.getElementById("remoteVideo");
-    const statusDiv = document.getElementById("status");
+<script>
+const socket = io();
+let pc, localStream;
+let currentRoom;
+let isInitiator = false;
 
-    function log(msg) {
-      console.log(msg);
-      statusDiv.textContent = msg;
+const joinBtn = document.getElementById("joinBtn");
+const roomInput = document.getElementById("room");
+const controls = document.getElementById("controls");
+const localVideo = document.getElementById("localVideo");
+const remoteVideo = document.getElementById("remoteVideo");
+const statusDiv = document.getElementById("status");
+
+function log(msg) {
+  console.log(msg);
+  statusDiv.textContent = msg;
+}
+
+joinBtn.onclick = () => {
+  const room = roomInput.value.trim();
+  if (!room) return alert("Enter room ID!");
+  currentRoom = room;
+  socket.emit("join-room", room);
+  log("Joining room " + room);
+};
+
+socket.on("room-full", () => alert("Room full. Only 2 users allowed."));
+socket.on("ready", () => {
+  log("✅ Ready: peer available");
+  if (!pc) setupPeer();
+  if (isInitiator) startCall();
+});
+
+function setupPeer() {
+  pc = new RTCPeerConnection({
+    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+  });
+
+  pc.onicecandidate = (e) => {
+    if (e.candidate)
+      socket.emit("ice-candidate", { roomId: currentRoom, candidate: e.candidate });
+  };
+
+  pc.onconnectionstatechange = () => {
+    console.log("PC state:", pc.connectionState);
+    if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
+      log("⚠️ Disconnected. Waiting for reconnect...");
     }
+  };
 
-    joinBtn.onclick = () => {
-      const room = roomInput.value.trim();
-      if (!room) return alert("Enter room ID!");
-      currentRoom = room;
-      socket.emit("join-room", room);
-    };
+  pc.ontrack = (e) => {
+    remoteVideo.srcObject = e.streams[0];
+    log("📺 Receiving remote stream");
+  };
+}
 
-    socket.on("room-full", () => {
-      alert("Room is full! Only 2 users allowed per room.");
-    });
+socket.on("offer", async ({ offer }) => {
+  if (!pc) setupPeer();
+  await pc.setRemoteDescription(new RTCSessionDescription(offer));
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  socket.emit("answer", { roomId: currentRoom, answer });
+});
 
-    socket.on("ready", () => {
-      log("Both users connected.");
-      setupPeerConnection();
-      controls.style.display = "block";
-    });
+socket.on("answer", async ({ answer }) => {
+  await pc.setRemoteDescription(new RTCSessionDescription(answer));
+});
 
-    function setupPeerConnection() {
-      pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-      });
+socket.on("ice-candidate", async (candidate) => {
+  try {
+    await pc.addIceCandidate(new RTCIceCandidate(candidate));
+  } catch (err) {
+    console.error("ICE error", err);
+  }
+});
 
-      pc.ontrack = (event) => {
-        log("Receiving remote stream...");
-        remoteVideo.srcObject = event.streams[0];
-      };
+async function share(type) {
+  let constraints = {};
+  if (type === "video") constraints.video = true;
+  if (type === "audio") constraints.audio = true;
+  if (type === "both") constraints = { video: true, audio: true };
 
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          socket.emit("ice-candidate", {
-            roomId: currentRoom,
-            candidate: event.candidate
-          });
-        }
-      };
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia(constraints);
+    localVideo.srcObject = localStream;
+    localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+    isInitiator = true;
+    startCall();
+  } catch (err) {
+    alert("⚠️ Cannot access camera or mic");
+    console.error(err);
+  }
+}
 
-      socket.on("offer", async (data) => {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        socket.emit("answer", { roomId: currentRoom, answer });
-      });
+async function startCall() {
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  socket.emit("offer", { roomId: currentRoom, offer });
+  log("📡 Sending offer...");
+}
 
-      socket.on("answer", async (data) => {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-      });
+document.getElementById("shareVideo").onclick = () => share("video");
+document.getElementById("shareAudio").onclick = () => share("audio");
+document.getElementById("shareBoth").onclick = () => share("both");
 
-      socket.on("ice-candidate", async (candidate) => {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (err) {
-          console.error("ICE error:", err);
-        }
-      });
-    }
+function toggleFullscreen(videoId) {
+  const video = document.getElementById(videoId);
+  if (document.fullscreenElement) document.exitFullscreen();
+  else video.requestFullscreen();
+}
+</script>
 
-    async function share(type) {
-      let constraints = {};
-      if (type === "video") constraints.video = true;
-      if (type === "audio") constraints.audio = true;
-      if (type === "both") constraints = { video: true, audio: true };
-
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        localVideo.srcObject = stream;
-        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        socket.emit("offer", { roomId: currentRoom, offer });
-
-        log("Media streaming started.");
-      } catch (err) {
-        alert("Unable to access camera/microphone.");
-        console.error(err);
-      }
-    }
-
-    document.getElementById("shareVideo").onclick = () => share("video");
-    document.getElementById("shareAudio").onclick = () => share("audio");
-    document.getElementById("shareBoth").onclick = () => share("both");
-
-    function toggleFullscreen(videoId) {
-      const video = document.getElementById(videoId);
-      if (document.fullscreenElement) {
-        document.exitFullscreen();
-      } else {
-        video.requestFullscreen();
-      }
-    }
-  </script>
 </body>
 </html>
