@@ -6,16 +6,20 @@
   <title>Peer Share Stream</title>
   <style>
     body {
-      font-family: Arial, sans-serif;
-      text-align: center;
-      background: #121212;
+      font-family: 'Segoe UI', sans-serif;
+      background: linear-gradient(135deg, #0d1117, #1b2735);
       color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      min-height: 100vh;
+      margin: 0;
+      padding: 20px;
     }
     h2 {
-      margin-top: 20px;
-    }
-    #controls {
-      margin: 15px;
+      font-size: 28px;
+      margin-bottom: 10px;
     }
     input, button {
       padding: 10px;
@@ -23,75 +27,129 @@
       border-radius: 8px;
       border: none;
       font-size: 16px;
+      outline: none;
     }
     input {
       width: 200px;
+      text-align: center;
     }
     button {
       background-color: #1e88e5;
       color: #fff;
       cursor: pointer;
+      transition: 0.2s;
     }
     button:hover {
       background-color: #1565c0;
     }
-    video {
-      width: 45%;
-      max-width: 400px;
-      margin: 10px;
-      border-radius: 10px;
-      background: #000;
+    #controls {
+      margin: 10px 0;
     }
     #videos {
       display: flex;
       justify-content: center;
       flex-wrap: wrap;
+      gap: 15px;
+      margin-top: 15px;
+      width: 100%;
+    }
+    video {
+      border-radius: 12px;
+      background: #000;
+      width: 45%;
+      max-width: 420px;
+      transition: transform 0.3s ease;
+    }
+    video:hover {
+      transform: scale(1.02);
+    }
+    .fullscreen-btn {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      background: rgba(0, 0, 0, 0.5);
+      border: none;
+      color: white;
+      padding: 5px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .video-wrapper {
+      position: relative;
+      display: inline-block;
+    }
+    #status {
+      font-size: 14px;
+      color: #8ab4f8;
+      margin-top: 5px;
     }
   </style>
 </head>
 <body>
   <h2>🎥 Peer Share Stream</h2>
-  <div>
-    <input id="room" placeholder="Enter Room ID" />
-    <button id="joinBtn">Join Room</button>
-  </div>
+
+  <input id="room" placeholder="Enter Room ID" />
+  <button id="joinBtn">Join Room</button>
+  <div id="status"></div>
+
   <div id="controls" style="display:none">
-    <button id="shareVideo">📹 Share Video</button>
-    <button id="shareAudio">🎤 Share Audio</button>
-    <button id="shareBoth">🎥 Share Both</button>
+    <button id="shareVideo">📹 Video</button>
+    <button id="shareAudio">🎤 Audio</button>
+    <button id="shareBoth">🎥 Both</button>
   </div>
+
   <div id="videos">
-    <video id="localVideo" autoplay muted playsinline></video>
-    <video id="remoteVideo" autoplay playsinline></video>
+    <div class="video-wrapper">
+      <video id="localVideo" autoplay muted playsinline></video>
+      <button class="fullscreen-btn" onclick="toggleFullscreen('localVideo')">⤢</button>
+    </div>
+    <div class="video-wrapper">
+      <video id="remoteVideo" autoplay playsinline></video>
+      <button class="fullscreen-btn" onclick="toggleFullscreen('remoteVideo')">⤢</button>
+    </div>
   </div>
 
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <script>
     const socket = io();
-    let pc;
-    let currentRoom;
-
+    let pc, currentRoom;
     const joinBtn = document.getElementById("joinBtn");
     const roomInput = document.getElementById("room");
     const controls = document.getElementById("controls");
     const localVideo = document.getElementById("localVideo");
     const remoteVideo = document.getElementById("remoteVideo");
+    const statusDiv = document.getElementById("status");
+
+    function log(msg) {
+      console.log(msg);
+      statusDiv.textContent = msg;
+    }
 
     joinBtn.onclick = () => {
       const room = roomInput.value.trim();
-      if (!room) return alert("Enter room ID");
+      if (!room) return alert("Enter room ID!");
       currentRoom = room;
       socket.emit("join-room", room);
-      controls.style.display = "block";
-      setupPeerConnection();
     };
+
+    socket.on("room-full", () => {
+      alert("Room is full! Only 2 users allowed per room.");
+    });
+
+    socket.on("ready", () => {
+      log("Both users connected.");
+      setupPeerConnection();
+      controls.style.display = "block";
+    });
 
     function setupPeerConnection() {
       pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
       });
 
       pc.ontrack = (event) => {
+        log("Receiving remote stream...");
         remoteVideo.srcObject = event.streams[0];
       };
 
@@ -99,16 +157,10 @@
         if (event.candidate) {
           socket.emit("ice-candidate", {
             roomId: currentRoom,
-            candidate: event.candidate,
+            candidate: event.candidate
           });
         }
       };
-
-      socket.on("user-joined", async () => {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        socket.emit("offer", { roomId: currentRoom, offer });
-      });
 
       socket.on("offer", async (data) => {
         await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
@@ -125,7 +177,7 @@
         try {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
         } catch (err) {
-          console.error("Error adding ICE candidate:", err);
+          console.error("ICE error:", err);
         }
       });
     }
@@ -140,8 +192,14 @@
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         localVideo.srcObject = stream;
         stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit("offer", { roomId: currentRoom, offer });
+
+        log("Media streaming started.");
       } catch (err) {
-        alert("Media access denied.");
+        alert("Unable to access camera/microphone.");
         console.error(err);
       }
     }
@@ -149,6 +207,15 @@
     document.getElementById("shareVideo").onclick = () => share("video");
     document.getElementById("shareAudio").onclick = () => share("audio");
     document.getElementById("shareBoth").onclick = () => share("both");
+
+    function toggleFullscreen(videoId) {
+      const video = document.getElementById(videoId);
+      if (document.fullscreenElement) {
+        document.exitFullscreen();
+      } else {
+        video.requestFullscreen();
+      }
+    }
   </script>
 </body>
 </html>
